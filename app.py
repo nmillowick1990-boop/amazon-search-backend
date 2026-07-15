@@ -10,18 +10,30 @@ logging.basicConfig(level=logging.INFO)
 
 MOCK_MODE = os.getenv("MOCK_MODE", "true").lower() == "true"
 
-AMAZON_ACCESS_KEY = os.getenv("AMAZON_ACCESS_KEY", "")
-AMAZON_SECRET_KEY = os.getenv("AMAZON_SECRET_KEY", "")
-AMAZON_ASSOCIATE_TAG = os.getenv("AMAZON_ASSOCIATE_TAG", "")
-AMAZON_COUNTRY = os.getenv("AMAZON_COUNTRY", "AU")
+SERPAPI_KEY = os.getenv("SERPAPI_KEY", "")
+AMAZON_DOMAIN = os.getenv("AMAZON_DOMAIN", "amazon.com.au")
 
-MAX_RESULTS = 8
+MAX_RESULTS = 6  # kept small - each result includes an image the ESP32 has to download+decode
 
 MOCK_RESULTS = [
-    {"title": "Example Wireless Mouse - Ergonomic, USB-C", "price": "$24.99", "asin": "B000MOCK01"},
-    {"title": "Example Wireless Mouse Pro - Silent Click, RGB", "price": "$34.50", "asin": "B000MOCK02"},
-    {"title": "Example Compact Mouse - Bluetooth, Lightweight", "price": "$19.00", "asin": "B000MOCK03"},
-    {"title": "Example Gaming Mouse - 16000 DPI, Programmable", "price": "$49.99", "asin": "B000MOCK04"},
+    {
+        "title": "Example Wireless Mouse - Ergonomic, USB-C",
+        "price": "$24.99",
+        "seller": "Amazon AU",
+        "image": "https://http.cat/images/200.jpg",
+    },
+    {
+        "title": "Example Wireless Mouse Pro - Silent Click, RGB",
+        "price": "$34.50",
+        "seller": "TechGear Store",
+        "image": "https://http.cat/images/201.jpg",
+    },
+    {
+        "title": "Example Compact Mouse - Bluetooth, Lightweight",
+        "price": "$19.00",
+        "seller": "Amazon AU",
+        "image": "https://http.cat/images/202.jpg",
+    },
 ]
 
 
@@ -30,31 +42,52 @@ def build_keywords(main_item, feature1, feature2, feature3):
     return " ".join(parts)
 
 
+def extract_price(item):
+    price = item.get("price")
+    if isinstance(price, dict):
+        return price.get("raw") or (f"${price.get('value')}" if price.get("value") else "N/A")
+    if isinstance(price, str) and price:
+        return price
+    return "N/A"
+
+
+def extract_seller(item):
+    seller = item.get("seller")
+    if isinstance(seller, dict):
+        return seller.get("name") or "Amazon"
+    if isinstance(seller, str) and seller:
+        return seller
+    return "Amazon"
+
+
+def extract_image(item):
+    return item.get("thumbnail") or ""
+
+
 def search_amazon_live(keywords):
-    # Requires the 'python-amazon-paapi' package and an APPROVED PA-API account
-    # (Amazon activates API access only after 3 qualifying Associate sales).
-    from amazon_paapi import AmazonApi
-    from amazon_paapi.models import Country
+    from serpapi import GoogleSearch
 
-    country_map = {
-        "AU": Country.AU,
-        "US": Country.US,
-        "UK": Country.UK,
-        "CA": Country.CA,
+    params = {
+        "engine": "amazon",
+        "k": keywords,
+        "amazon_domain": AMAZON_DOMAIN,
+        "api_key": SERPAPI_KEY,
     }
-    country = country_map.get(AMAZON_COUNTRY.upper(), Country.AU)
+    search = GoogleSearch(params)
+    data = search.get_dict()
 
-    amazon = AmazonApi(AMAZON_ACCESS_KEY, AMAZON_SECRET_KEY, AMAZON_ASSOCIATE_TAG, country)
-    search_result = amazon.search_items(keywords=keywords, item_count=MAX_RESULTS)
+    if "error" in data:
+        raise RuntimeError(data["error"])
 
+    organic = data.get("organic_results", [])
     results = []
-    for item in getattr(search_result, "items", [])[:MAX_RESULTS]:
-        title = getattr(item.item_info.title, "display_value", "Unknown item") if item.item_info and item.item_info.title else "Unknown item"
-        price = "N/A"
-        if item.offers and item.offers.listings:
-            price = item.offers.listings[0].price.display_amount
-        asin = item.asin or ""
-        results.append({"title": title[:100], "price": price, "asin": asin})
+    for item in organic[:MAX_RESULTS]:
+        results.append({
+            "title": (item.get("title") or "Unknown item")[:100],
+            "price": extract_price(item),
+            "seller": extract_seller(item),
+            "image": extract_image(item),
+        })
     return results
 
 
